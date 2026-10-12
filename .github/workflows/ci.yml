@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Install pytest
+        run: pip install pytest python-dotenv
+
+      - name: Test
+        run: pytest -v
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - SANDBOX_HOST
+          - ALBAN_HOST
+          - SECPRO_HOST
+    env:
+      HOST: ${{ secrets[matrix.host] }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Copy script
+        run: |
+          ssh root@$HOST "mkdir -p /opt/cicd"
+          scp mailer.py root@$HOST:/opt/cicd/
+
+      - name: Write .env
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          ssh root@$HOST "umask 077; cat > /opt/cicd/.env" <<EOF
+          SMTP_HOST=$SMTP_HOST
+          SMTP_PORT=$SMTP_PORT
+          SMTP_USER=$SMTP_USER
+          SMTP_PASS=$SMTP_PASS
+          MAIL_TO=$MAIL_TO
+          EOF
+
+      - name: Run script
+        run: ssh root@$HOST "cd /opt/cicd && python3 mailer.py"
